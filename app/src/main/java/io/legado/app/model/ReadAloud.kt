@@ -9,7 +9,10 @@ import io.legado.app.constant.IntentAction
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.HttpTTS
 import io.legado.app.help.config.AppConfig
+import io.legado.app.help.book.isEpub
+import io.legado.app.model.localBook.EpubFile
 import io.legado.app.service.BaseReadAloudService
+import io.legado.app.service.EpubAudioReadAloudService
 import io.legado.app.service.HttpReadAloudService
 import io.legado.app.service.TTSReadAloudService
 import io.legado.app.utils.LogUtils
@@ -27,6 +30,10 @@ object ReadAloud {
     private fun getReadAloudClass(): Class<*> {
         val ttsEngine = ttsEngine
         if (ttsEngine.isNullOrBlank()) {
+            val book = ReadBook.book
+            if (book != null && book.isEpub && EpubFile.hasAudio(book)) {
+                return EpubAudioReadAloudService::class.java
+            }
             return TTSReadAloudService::class.java
         }
         if (StringUtils.isNumeric(ttsEngine)) {
