@@ -21,6 +21,7 @@ import io.legado.app.databinding.DialogEditTextBinding
 import io.legado.app.databinding.DialogRecyclerViewBinding
 import io.legado.app.databinding.ItemHttpTtsBinding
 import io.legado.app.help.DirectLinkUpload
+import io.legado.app.help.book.update
 import io.legado.app.help.config.AppConfig
 import io.legado.app.lib.dialogs.SelectItem
 import io.legado.app.lib.dialogs.alert
@@ -110,13 +111,32 @@ class SpeakEngineDialog() : BaseDialogFragment(R.layout.dialog_recycler_view),
                 ivEdit.gone()
                 ivMenuDelete.gone()
                 labelSys.visible()
-                cbName.text = "系统默认"
+                cbName.text = getString(R.string.system_default)
                 cbName.tag = ""
-                cbName.isChecked = ttsEngine == null || ttsEngine!!.isJsonObject()
-                        && GSON.fromJsonObject<SelectItem<String>>(ttsEngine)
-                    .getOrNull()?.value.isNullOrEmpty()
+                cbName.isChecked = isSystemDefaultSelected()
                 cbName.setOnClickListener {
-                    upTts(GSON.toJson(SelectItem("系统默认", "")))
+                    upTts(GSON.toJson(SelectItem(getString(R.string.system_default), "")))
+                }
+            }
+        }
+        adapter.addHeaderView {
+            ItemHttpTtsBinding.inflate(layoutInflater, recyclerView, false).apply {
+                sysTtsViews.add(cbName)
+                ivEdit.gone()
+                ivMenuDelete.gone()
+                labelSys.visible()
+                cbName.text = getString(R.string.book_built_in_media)
+                cbName.tag = ReadAloud.BOOK_BUILT_IN_MEDIA
+                cbName.isChecked = isBuiltInMediaSelected()
+                cbName.setOnClickListener {
+                    upTts(
+                        GSON.toJson(
+                            SelectItem(
+                                getString(R.string.book_built_in_media),
+                                ReadAloud.BOOK_BUILT_IN_MEDIA
+                            )
+                        )
+                    )
                 }
             }
         }
@@ -140,7 +160,12 @@ class SpeakEngineDialog() : BaseDialogFragment(R.layout.dialog_recycler_view),
         tvFooterLeft.setText(R.string.book)
         tvFooterLeft.visible()
         tvFooterLeft.setOnClickListener {
-            ReadBook.book?.setTtsEngine(ttsEngine)
+            ReadBook.book?.let { book ->
+                book.setTtsEngine(ttsEngine)
+                lifecycleScope.launch(IO) {
+                    book.update()
+                }
+            }
             callBack?.upSpeakEngineSummary()
             ReadAloud.upReadAloudClass()
             dismissAllowingStateLoss()
@@ -148,7 +173,12 @@ class SpeakEngineDialog() : BaseDialogFragment(R.layout.dialog_recycler_view),
         tvOk.setText(R.string.general)
         tvOk.visible()
         tvOk.setOnClickListener {
-            ReadBook.book?.setTtsEngine(null)
+            ReadBook.book?.let { book ->
+                book.setTtsEngine(null)
+                lifecycleScope.launch(IO) {
+                    book.update()
+                }
+            }
             AppConfig.ttsEngine = ttsEngine
             callBack?.upSpeakEngineSummary()
             ReadAloud.upReadAloudClass()
@@ -229,10 +259,27 @@ class SpeakEngineDialog() : BaseDialogFragment(R.layout.dialog_recycler_view),
     private fun upTts(tts: String) {
         ttsEngine = tts
         sysTtsViews.forEach {
-            it.isChecked = GSON.fromJsonObject<SelectItem<String>>(ttsEngine)
-                .getOrNull()?.value == it.tag
+            it.isChecked = when (it.tag) {
+                "" -> isSystemDefaultSelected()
+                ReadAloud.BOOK_BUILT_IN_MEDIA -> isBuiltInMediaSelected()
+                else -> selectedEngineValue() == it.tag
+            }
         }
         adapter.notifyItemRangeChanged(adapter.getHeaderCount(), adapter.itemCount)
+    }
+
+    private fun selectedEngineValue(): String? {
+        return GSON.fromJsonObject<SelectItem<String>>(ttsEngine).getOrNull()?.value
+    }
+
+    private fun isBuiltInMediaSelected(): Boolean {
+        return selectedEngineValue() == ReadAloud.BOOK_BUILT_IN_MEDIA
+            || (ttsEngine.isNullOrBlank() && ReadAloud.willUseBookBuiltInMedia())
+    }
+
+    private fun isSystemDefaultSelected(): Boolean {
+        return (ttsEngine.isNullOrBlank() || selectedEngineValue().isNullOrEmpty())
+            && !ReadAloud.willUseBookBuiltInMedia()
     }
 
     inner class Adapter(context: Context) :

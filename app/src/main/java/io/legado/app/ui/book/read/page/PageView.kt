@@ -430,6 +430,10 @@ class PageView(context: Context) : FrameLayout(context) {
         return binding.contentTextView.getReadAloudPos()
     }
 
+    fun getReadAloudPos(x: Float, y: Float): Pair<Int, TextLine>? {
+        return binding.contentTextView.getReadAloudPos(x, y - headerHeight)
+    }
+
     fun markAsMainView() {
         isMainView = true
         binding.contentTextView.isMainView = true

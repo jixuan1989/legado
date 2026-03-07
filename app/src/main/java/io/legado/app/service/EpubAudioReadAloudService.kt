@@ -1,7 +1,9 @@
 package io.legado.app.service
 
 import android.app.PendingIntent
+import android.content.Intent
 import android.net.Uri
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -10,17 +12,21 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import io.legado.app.R
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.EventBus
+import io.legado.app.constant.IntentAction
 import io.legado.app.data.appDb
 import io.legado.app.help.MediaHelp
 import io.legado.app.help.config.AppConfig
+import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
 import io.legado.app.model.localBook.EpubFile
 import io.legado.app.utils.servicePendingIntent
+import io.legado.app.utils.startForegroundServiceCompat
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.roundToLong
 import kotlinx.coroutines.Dispatchers.Main
 import io.legado.app.utils.postEvent
 
@@ -32,6 +38,7 @@ class EpubAudioReadAloudService : BaseReadAloudService(), Player.Listener {
 
     private var exoPlayer: ExoPlayer? = null
     private var progressJob: Job? = null
+    private var pendingSeekRatio: Float? = null
     private val TAG = "EpubAudioReadAloud"
 
     override fun onCreate() {
@@ -62,7 +69,7 @@ class EpubAudioReadAloudService : BaseReadAloudService(), Player.Listener {
         val audioFile = EpubFile.getAudioFile(book, chapter)
         if (audioFile == null || !audioFile.exists()) {
             toastOnUi(getString(R.string.epub_audio_not_found))
-            nextChapter()
+            switchToTtsFallback()
             return
         }
         super.play()
@@ -71,15 +78,15 @@ class EpubAudioReadAloudService : BaseReadAloudService(), Player.Listener {
         exoPlayer?.let { player ->
             player.stop()
             player.setMediaItem(androidx.media3.common.MediaItem.fromUri(Uri.fromFile(audioFile)))
+            pendingSeekRatio = buildSeekRatio()
             player.prepare()
+            applyPendingSeek(player)
             player.playWhenReady = true
-            val startPos = (ReadBook.durChapterPos).toLong().coerceAtLeast(0)
-            if (startPos > 0) player.seekTo(startPos)
             progressJob = lifecycleScope.launch(Main) {
                 while (isActive) {
                     delay(1000)
                     if (!pause) {
-                        ReadBook.durChapterPos = player.currentPosition.toInt()
+                        updateReadAloudPosition(player)
                     }
                 }
             }
@@ -113,7 +120,7 @@ class EpubAudioReadAloudService : BaseReadAloudService(), Player.Listener {
                 while (isActive) {
                     delay(1000)
                     if (!pause) {
-                        ReadBook.durChapterPos = player.currentPosition.toInt()
+                        updateReadAloudPosition(player)
                     }
                 }
             }
@@ -124,10 +131,11 @@ class EpubAudioReadAloudService : BaseReadAloudService(), Player.Listener {
         when (playbackState) {
             Player.STATE_ENDED -> {
                 progressJob?.cancel()
-                exoPlayer?.currentPosition?.let { ReadBook.durChapterPos = it.toInt() }
+                ReadBook.durChapterPos = currentChapterLength()
                 nextChapter()
             }
             Player.STATE_READY -> {
+                exoPlayer?.let { applyPendingSeek(it) }
                 postEvent(EventBus.ALOUD_STATE, io.legado.app.constant.Status.PLAY)
             }
         }
@@ -136,7 +144,59 @@ class EpubAudioReadAloudService : BaseReadAloudService(), Player.Listener {
     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
         AppLog.put("EPUB 音频播放出错\n${error.message}", error)
         toastOnUi(getString(R.string.epub_audio_play_error))
-        nextChapter()
+        switchToTtsFallback()
+    }
+
+    private fun currentChapterLength(): Int {
+        return textChapter?.chapterLength ?: ReadBook.curTextChapter?.chapterLength ?: 0
+    }
+
+    private fun buildSeekRatio(): Float? {
+        ReadAloud.consumeTouchSeekRatio()?.let { return it }
+        textChapter?.getVisualProgressRatio(readAloudNumber)?.let { return it }
+        val chapterLength = currentChapterLength()
+        if (chapterLength <= 0) return null
+        return (readAloudNumber.toFloat() / chapterLength.toFloat()).coerceIn(0f, 1f)
+    }
+
+    private fun applyPendingSeek(player: ExoPlayer) {
+        val ratio = pendingSeekRatio ?: return
+        val duration = player.duration
+        if (duration > 0) {
+            player.seekTo((duration * ratio).roundToLong())
+            pendingSeekRatio = null
+        }
+    }
+
+    private fun updateReadAloudPosition(player: ExoPlayer) {
+        val duration = player.duration
+        val chapterLength = currentChapterLength()
+        ReadBook.durChapterPos = if (duration > 0 && chapterLength > 0) {
+            val ratio = (player.currentPosition.toDouble() / duration.toDouble())
+                .toFloat()
+                .coerceIn(0f, 1f)
+            textChapter?.getChapterPositionByVisualRatio(ratio)
+                ?: ((ratio * chapterLength.toFloat()).toInt().coerceIn(0, chapterLength))
+        } else {
+            player.currentPosition.toInt()
+        }
+        upTtsProgress(ReadBook.durChapterPos + 1)
+    }
+
+    private fun switchToTtsFallback() {
+        progressJob?.cancel()
+        exoPlayer?.stop()
+        val pageIndex = ReadBook.durPageIndex
+        val pageStart = textChapter?.getReadLength(pageIndex) ?: 0
+        val startPos = (ReadBook.durChapterPos - pageStart).coerceAtLeast(0)
+        val intent = Intent(this, TTSReadAloudService::class.java).apply {
+            action = IntentAction.play
+            putExtra("play", true)
+            putExtra("pageIndex", pageIndex)
+            putExtra("startPos", startPos)
+        }
+        stopSelf()
+        startForegroundServiceCompat(intent)
     }
 
     override fun aloudServicePendingIntent(actionStr: String): PendingIntent? {

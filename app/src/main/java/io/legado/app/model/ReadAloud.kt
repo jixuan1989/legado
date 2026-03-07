@@ -10,36 +10,88 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.HttpTTS
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.book.isEpub
+import io.legado.app.lib.dialogs.SelectItem
 import io.legado.app.model.localBook.EpubFile
 import io.legado.app.service.BaseReadAloudService
 import io.legado.app.service.EpubAudioReadAloudService
 import io.legado.app.service.HttpReadAloudService
 import io.legado.app.service.TTSReadAloudService
+import io.legado.app.utils.GSON
 import io.legado.app.utils.LogUtils
 import io.legado.app.utils.StringUtils
+import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.postEvent
 import io.legado.app.utils.startForegroundServiceCompat
 import io.legado.app.utils.toastOnUi
 import splitties.init.appCtx
 
 object ReadAloud {
+    const val BOOK_BUILT_IN_MEDIA = "__book_built_in_media__"
+
     private var aloudClass: Class<*> = getReadAloudClass()
+    private var pendingTouchSeekRatio: Float? = null
     val ttsEngine get() = ReadBook.book?.getTtsEngine() ?: AppConfig.ttsEngine
     var httpTTS: HttpTTS? = null
 
+    private val selectedEngine: SelectItem<String>?
+        get() = GSON.fromJsonObject<SelectItem<String>>(ttsEngine).getOrNull()
+
+    private fun canUseBookBuiltInMedia(): Boolean {
+        val book = ReadBook.book ?: return false
+        if (!book.isEpub) return false
+        val chapter = appDb.bookChapterDao.getChapter(book.bookUrl, ReadBook.durChapterIndex)
+            ?: return EpubFile.hasAudio(book)
+        return EpubFile.hasAudio(book, chapter)
+    }
+
+    fun useBookBuiltInMedia(): Boolean {
+        return selectedEngine?.value == BOOK_BUILT_IN_MEDIA
+    }
+
+    fun willUseBookBuiltInMedia(): Boolean {
+        return getReadAloudClass() == EpubAudioReadAloudService::class.java
+    }
+
+    fun setTouchSeekRatio(ratio: Float?) {
+        pendingTouchSeekRatio = ratio?.coerceIn(0f, 1f)
+    }
+
+    fun consumeTouchSeekRatio(): Float? {
+        val ratio = pendingTouchSeekRatio
+        pendingTouchSeekRatio = null
+        return ratio
+    }
+
+    fun getTtsEngineName(): String? {
+        val ttsEngine = ttsEngine ?: return null
+        if (StringUtils.isNumeric(ttsEngine)) return null
+        val engine = selectedEngine?.value ?: ttsEngine
+        return engine.takeUnless {
+            it.isBlank() || it == BOOK_BUILT_IN_MEDIA
+        }
+    }
+
     private fun getReadAloudClass(): Class<*> {
         val ttsEngine = ttsEngine
+        val canUseBuiltInMedia = canUseBookBuiltInMedia()
         if (ttsEngine.isNullOrBlank()) {
-            val book = ReadBook.book
-            if (book != null && book.isEpub && EpubFile.hasAudio(book)) {
-                return EpubAudioReadAloudService::class.java
+            return if (canUseBuiltInMedia) {
+                EpubAudioReadAloudService::class.java
+            } else {
+                TTSReadAloudService::class.java
             }
-            return TTSReadAloudService::class.java
         }
         if (StringUtils.isNumeric(ttsEngine)) {
             httpTTS = appDb.httpTTSDao.get(ttsEngine.toLong())
             if (httpTTS != null) {
                 return HttpReadAloudService::class.java
+            }
+        }
+        if (useBookBuiltInMedia()) {
+            return if (canUseBuiltInMedia) {
+                EpubAudioReadAloudService::class.java
+            } else {
+                TTSReadAloudService::class.java
             }
         }
         return TTSReadAloudService::class.java
@@ -56,6 +108,13 @@ object ReadAloud {
         pageIndex: Int = ReadBook.durPageIndex,
         startPos: Int = 0
     ) {
+        val targetClass = getReadAloudClass()
+        if (BaseReadAloudService.isRun && aloudClass != targetClass) {
+            context.startForegroundServiceCompat(Intent(context, aloudClass).apply {
+                action = IntentAction.stop
+            })
+        }
+        aloudClass = targetClass
         val intent = Intent(context, aloudClass)
         intent.action = IntentAction.play
         intent.putExtra("play", play)

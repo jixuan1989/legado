@@ -220,6 +220,8 @@ class ReadBookActivity : BaseReadBookActivity(),
         PopupAction(this)
     }
     override val isInitFinish: Boolean get() = viewModel.isInitFinish
+    override val isReadAloudTouchSeekEnabled: Boolean
+        get() = BaseReadAloudService.isRun
     override val isScroll: Boolean get() = binding.readView.isScroll
     private val isAutoPage get() = binding.readView.isAutoPage
     override var isShowingSearchResult = false
@@ -246,7 +248,16 @@ class ReadBookActivity : BaseReadBookActivity(),
             binding.readMenu.upSeekBar()
         }
     }
-
+    private var pendingReadAloudTouchTarget: ReadAloudTouchTarget? = null
+    private var lastReadAloudTouchTarget: ReadAloudTouchTarget? = null
+    private val readAloudTouchSeekThrottle = throttle(80) {
+        pendingReadAloudTouchTarget?.let { target ->
+            if (target != lastReadAloudTouchTarget) {
+                lastReadAloudTouchTarget = target
+                seekReadAloudTo(target)
+            }
+        }
+    }
     //恢复跳转前进度对话框的交互结果
     private var confirmRestoreProcess: Boolean? = null
     private val networkChangedListener by lazy {
@@ -1121,6 +1132,13 @@ class ReadBookActivity : BaseReadBookActivity(),
         showDialogFragment<ReadAloudDialog>()
     }
 
+    override fun onReadAloudDialogVisibilityChanged(showing: Boolean) {
+        if (!showing) {
+            pendingReadAloudTouchTarget = null
+            binding.readView.stopReadAloudTouchSeek()
+        }
+    }
+
     /**
      * 自动翻页
      */
@@ -1134,6 +1152,60 @@ class ReadBookActivity : BaseReadBookActivity(),
             screenTimeOut = -1L
             screenOffTimerStart()
         }
+    }
+
+    private data class ReadAloudTouchTarget(
+        val chapterIndex: Int,
+        val chapterPosition: Int,
+        val pagePosition: Int,
+        val seekRatio: Float?
+    )
+
+    private fun seekReadAloudTo(target: ReadAloudTouchTarget) {
+        if (!BaseReadAloudService.isRun) return
+        autoPageStop()
+        ReadAloud.setTouchSeekRatio(target.seekRatio)
+        if (ReadBook.durChapterIndex != target.chapterIndex) {
+            ReadBook.openChapter(target.chapterIndex, target.chapterPosition, true) {
+                val startPos = buildReadAloudStartPos(target.chapterIndex, target.chapterPosition)
+                ReadBook.readAloud(startPos = startPos)
+            }
+        } else {
+            if (ReadBook.durChapterPos == target.chapterPosition) return
+            val oldPageIndex = ReadBook.durPageIndex
+            ReadBook.durChapterPos = target.chapterPosition
+            val newPageIndex = ReadBook.durPageIndex
+            if (newPageIndex != oldPageIndex) {
+                upContent(resetPageOffset = false)
+            }
+            val startPos = buildReadAloudStartPos(target.chapterIndex, target.chapterPosition)
+            ReadBook.readAloud(startPos = startPos)
+        }
+    }
+
+    private fun buildReadAloudStartPos(chapterIndex: Int, chapterPosition: Int): Int {
+        val relativeChapterIndex = chapterIndex - ReadBook.durChapterIndex
+        val textChapter = ReadBook.textChapter(relativeChapterIndex) ?: return 0
+        val pageIndex = textChapter.getPageIndexByCharIndex(chapterPosition)
+            .coerceIn(0, textChapter.lastIndex.coerceAtLeast(0))
+        val page = textChapter.getPage(pageIndex) ?: return 0
+        val pageStart = textChapter.getReadLength(pageIndex)
+        return (chapterPosition - pageStart).coerceIn(0, page.charSize.coerceAtLeast(1) - 1)
+    }
+
+    override fun onReadAloudTouchSeek(
+        chapterIndex: Int,
+        chapterPosition: Int,
+        pagePosition: Int,
+        seekRatio: Float?
+    ) {
+        pendingReadAloudTouchTarget = ReadAloudTouchTarget(
+            chapterIndex = chapterIndex,
+            chapterPosition = chapterPosition,
+            pagePosition = pagePosition,
+            seekRatio = seekRatio
+        )
+        readAloudTouchSeekThrottle()
     }
 
     override fun autoPageStop() {
