@@ -3,6 +3,7 @@ package io.legado.app.ui.book.read.page
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Build
 import android.util.AttributeSet
@@ -37,13 +38,17 @@ import io.legado.app.ui.book.read.page.provider.ChapterProvider
 import io.legado.app.ui.book.read.page.provider.LayoutProgressListener
 import io.legado.app.ui.book.read.page.provider.TextPageFactory
 import io.legado.app.utils.activity
+import io.legado.app.utils.dpToPx
+import io.legado.app.utils.getCompatColor
 import io.legado.app.utils.invisible
 import io.legado.app.utils.longToastOnUi
 import io.legado.app.utils.showDialogFragment
+import io.legado.app.utils.spToPx
 import io.legado.app.utils.throttle
 import java.text.BreakIterator
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * 阅读视图
@@ -51,6 +56,17 @@ import kotlin.math.abs
 class ReadView(context: Context, attrs: AttributeSet) :
     FrameLayout(context, attrs),
     DataSource, LayoutProgressListener {
+
+    private data class ReadAloudTouchPreview(
+        val chapterIndex: Int,
+        val chapterPosition: Int,
+        val pagePosition: Int,
+        val seekRatio: Float?,
+        val lineTop: Float,
+        val lineBottom: Float,
+        val isLeftLine: Boolean,
+        val hint: String
+    )
 
     val callBack: CallBack get() = activity as CallBack
     var pageFactory: TextPageFactory = TextPageFactory(this)
@@ -111,6 +127,33 @@ class ReadView(context: Context, attrs: AttributeSet) :
     private val upProgressThrottle = throttle(200) { post { upProgress() } }
     val autoPager = AutoPager(this)
     val isAutoPage get() = autoPager.isRunning
+    private var isReadAloudTouchSeeking = false
+    private var readAloudTouchPreview: ReadAloudTouchPreview? = null
+    private val readAloudSeekLinePaint by lazy {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = context.getCompatColor(R.color.accent)
+            strokeWidth = 2.dpToPx().toFloat()
+        }
+    }
+    private val readAloudSeekBubblePaint by lazy {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = context.getCompatColor(R.color.translucent)
+        }
+    }
+    private val readAloudSeekBubbleStrokePaint by lazy {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = context.getCompatColor(R.color.accent)
+            style = Paint.Style.STROKE
+            strokeWidth = 1.dpToPx().toFloat()
+        }
+    }
+    private val readAloudSeekTextPaint by lazy {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = context.getCompatColor(R.color.white)
+            textAlign = Paint.Align.CENTER
+            textSize = 13f.spToPx()
+        }
+    }
 
     init {
         addView(nextPage)
@@ -154,6 +197,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
         super.dispatchDraw(canvas)
         pageDelegate?.onDraw(canvas)
         autoPager.onDraw(canvas)
+        readAloudTouchPreview?.let { drawReadAloudTouchPreview(canvas, it) }
     }
 
     override fun computeScroll() {
@@ -192,6 +236,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 callBack.screenOffTimerStart()
+                stopReadAloudTouchSeek()
                 if (isTextSelected) {
                     curPage.cancelSelect()
                     isTextSelected = false
@@ -210,6 +255,12 @@ class ReadView(context: Context, attrs: AttributeSet) :
 
             MotionEvent.ACTION_MOVE -> {
                 if (!pressDown) return true
+                if (isReadAloudTouchSeeking) {
+                    setTouchPoint(event.x, event.y, false)
+                    dispatchReadAloudTouchSeek(event.x, event.y)
+                    autoPager.pause()
+                    return true
+                }
                 val absX = abs(startX - event.x)
                 val absY = abs(startY - event.y)
                 if (!isMove) {
@@ -220,6 +271,11 @@ class ReadView(context: Context, attrs: AttributeSet) :
                     removeCallbacks(longPressRunnable)
                     if (isTextSelected) {
                         selectText(event.x, event.y)
+                    } else if (callBack.isReadAloudTouchSeekEnabled) {
+                        isReadAloudTouchSeeking = true
+                        setTouchPoint(event.x, event.y, false)
+                        dispatchReadAloudTouchSeek(event.x, event.y)
+                        autoPager.pause()
                     } else {
                         pageDelegate?.onTouch(event)
                     }
@@ -231,6 +287,12 @@ class ReadView(context: Context, attrs: AttributeSet) :
                 removeCallbacks(longPressRunnable)
                 if (!pressDown) return true
                 pressDown = false
+                if (isReadAloudTouchSeeking) {
+                    stopReadAloudTouchSeek()
+                    pressOnTextSelected = false
+                    autoPager.resume()
+                    return true
+                }
                 if (!pageDelegate!!.isMoved && !isMove) {
                     if (!longPressed && !pressOnTextSelected) {
                         if (!curPage.onClick(startX, startY)) {
@@ -251,7 +313,9 @@ class ReadView(context: Context, attrs: AttributeSet) :
                 removeCallbacks(longPressRunnable)
                 if (!pressDown) return true
                 pressDown = false
-                if (isTextSelected) {
+                if (isReadAloudTouchSeeking) {
+                    stopReadAloudTouchSeek()
+                } else if (isTextSelected) {
                     callBack.showTextActionMenu()
                 } else if (pageDelegate!!.isMoved) {
                     pageDelegate?.onTouch(event)
@@ -679,6 +743,108 @@ class ReadView(context: Context, attrs: AttributeSet) :
         return curPage.getReadAloudPos()
     }
 
+    fun getReadAloudPos(x: Float, y: Float): Pair<Int, TextLine>? {
+        return curPage.getReadAloudPos(x, y)
+    }
+
+    fun stopReadAloudTouchSeek() {
+        isReadAloudTouchSeeking = false
+        if (readAloudTouchPreview != null) {
+            readAloudTouchPreview = null
+            invalidate()
+        }
+    }
+
+    private fun dispatchReadAloudTouchSeek(x: Float, y: Float): Boolean {
+        val preview = buildReadAloudTouchPreview(x, y) ?: return clearReadAloudTouchPreview()
+        if (preview != readAloudTouchPreview) {
+            readAloudTouchPreview = preview
+            invalidate()
+        }
+        callBack.onReadAloudTouchSeek(
+            preview.chapterIndex,
+            preview.chapterPosition,
+            preview.pagePosition,
+            preview.seekRatio
+        )
+        return true
+    }
+
+    private fun buildReadAloudTouchPreview(x: Float, y: Float): ReadAloudTouchPreview? {
+        val pos = getReadAloudPos(x, y) ?: return null
+        return ReadAloudTouchPreview(
+            chapterIndex = pos.first,
+            chapterPosition = pos.second.chapterPosition,
+            pagePosition = pos.second.pagePosition,
+            seekRatio = buildReadAloudTouchSeekRatio(pos.first, pos.second.chapterPosition),
+            lineTop = pos.second.lineTop,
+            lineBottom = pos.second.lineBottom,
+            isLeftLine = pos.second.isLeftLine,
+            hint = buildReadAloudTouchHint(pos.first, pos.second.chapterPosition)
+        )
+    }
+
+    private fun buildReadAloudTouchSeekRatio(chapterIndex: Int, chapterPosition: Int): Float? {
+        val relativeChapterIndex = chapterIndex - ReadBook.durChapterIndex
+        val textChapter = ReadBook.textChapter(relativeChapterIndex) ?: return null
+        return textChapter.getVisualProgressRatio(chapterPosition)
+    }
+
+    private fun clearReadAloudTouchPreview(): Boolean {
+        if (readAloudTouchPreview != null) {
+            readAloudTouchPreview = null
+            invalidate()
+        }
+        return false
+    }
+
+    private fun buildReadAloudTouchHint(chapterIndex: Int, chapterPosition: Int): String {
+        val relativeChapterIndex = chapterIndex - ReadBook.durChapterIndex
+        val chapterLength = ReadBook.textChapter(relativeChapterIndex)?.chapterLength ?: 0
+        if (chapterLength <= 0) {
+            return "第${chapterIndex + 1}章"
+        }
+        val percent = (chapterPosition.toFloat() / chapterLength.toFloat()).coerceIn(0f, 1f)
+        return "第${chapterIndex + 1}章 ${(percent * 100).roundToInt()}%"
+    }
+
+    private fun drawReadAloudTouchPreview(canvas: Canvas, preview: ReadAloudTouchPreview) {
+        val bubbleMargin = 8.dpToPx().toFloat()
+        val bubbleRadius = 10.dpToPx().toFloat()
+        val bubbleHorizontalPadding = 10.dpToPx().toFloat()
+        val bubbleVerticalPadding = 6.dpToPx().toFloat()
+        val visibleTop = ChapterProvider.paddingTop.toFloat()
+        val visibleBottom = ChapterProvider.visibleBottom.toFloat()
+        val lineY = ((preview.lineTop + preview.lineBottom) / 2f).coerceIn(visibleTop, visibleBottom)
+        val horizontalPadding = 12.dpToPx().toFloat()
+        val lineStartX = horizontalPadding
+        val lineEndX = width.toFloat() - horizontalPadding
+        canvas.drawLine(lineStartX, lineY, lineEndX, lineY, readAloudSeekLinePaint)
+
+        val hint = preview.hint
+        val textWidth = readAloudSeekTextPaint.measureText(hint)
+        val textMetrics = readAloudSeekTextPaint.fontMetrics
+        val bubbleWidth = textWidth + bubbleHorizontalPadding * 2f
+        val bubbleHeight = (textMetrics.bottom - textMetrics.top) + bubbleVerticalPadding * 2f
+        val bubbleLeft = (lineEndX - bubbleWidth).coerceAtLeast(lineStartX)
+        val preferredTop = lineY - bubbleHeight - bubbleMargin
+        val bubbleTop = if (preferredTop >= visibleTop) {
+            preferredTop
+        } else {
+            (lineY + bubbleMargin).coerceAtMost(visibleBottom - bubbleHeight)
+        }
+        val bubbleRect = RectF(
+            bubbleLeft,
+            bubbleTop,
+            lineEndX,
+            bubbleTop + bubbleHeight
+        )
+        canvas.drawRoundRect(bubbleRect, bubbleRadius, bubbleRadius, readAloudSeekBubblePaint)
+        canvas.drawRoundRect(bubbleRect, bubbleRadius, bubbleRadius, readAloudSeekBubbleStrokePaint)
+        val baseLine = bubbleRect.centerY() - (textMetrics.ascent + textMetrics.descent) / 2f
+        canvas.drawText(hint, bubbleRect.centerX(), baseLine, readAloudSeekTextPaint)
+    }
+
     fun invalidateTextPage() {
         if (!AppConfig.optimizeRender) {
             return
@@ -744,10 +910,12 @@ class ReadView(context: Context, attrs: AttributeSet) :
 
     interface CallBack {
         val isInitFinish: Boolean
+        val isReadAloudTouchSeekEnabled: Boolean
         fun showActionMenu()
         fun screenOffTimerStart()
         fun showTextActionMenu()
         fun autoPageStop()
+        fun onReadAloudTouchSeek(chapterIndex: Int, chapterPosition: Int, pagePosition: Int, seekRatio: Float?)
         fun openChapterList()
         fun addBookmark()
         fun changeReplaceRuleState()

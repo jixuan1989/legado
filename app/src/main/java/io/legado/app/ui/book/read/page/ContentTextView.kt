@@ -463,15 +463,87 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
             for (i in lines.indices) {
                 val textLine = lines[i]
                 if (textLine.isVisible(relativeOffset)) {
-                    val visibleLine = textLine.copy().apply {
-                        lineTop += relativeOffset
-                        lineBottom += relativeOffset
-                    }
-                    return textPage.chapterIndex to visibleLine
+                    return textPage.chapterIndex to buildReadAloudLine(textLine, relativeOffset)
                 }
             }
         }
         return null
+    }
+
+    fun getReadAloudPos(x: Float, y: Float): Pair<Int, TextLine>? {
+        var result: Pair<Int, TextLine>? = null
+        touchRough(x, y) { relativeOffset, textPos, textPage, textLine, _ ->
+            result = textPage.chapterIndex to buildReadAloudLine(
+                textLine = textLine,
+                relativeOffset = relativeOffset,
+                columnIndex = textPos.columnIndex
+            )
+        }
+        if (result != null) return result
+        val visibleTop = ChapterProvider.paddingTop.toFloat()
+        val visibleBottom = ChapterProvider.visibleBottom.toFloat()
+        if (y > visibleBottom && pageFactory.hasNext()) {
+            return buildBoundaryReadAloudPos(relativePage(1), y.coerceAtMost(visibleBottom))
+        }
+        if (y < visibleTop && pageFactory.hasPrev()) {
+            return buildBoundaryReadAloudPos(pageFactory.prevPage, y.coerceAtLeast(visibleTop), true)
+        }
+        val currentLines = textPage.lines
+        val firstLine = currentLines.firstOrNull()
+        val lastLine = currentLines.lastOrNull()
+        if (lastLine != null && y >= lastLine.lineBottom && pageFactory.hasNext()) {
+            return buildBoundaryReadAloudPos(relativePage(1), y.coerceIn(visibleTop, visibleBottom))
+        }
+        if (firstLine != null && y <= firstLine.lineTop && pageFactory.hasPrev()) {
+            return buildBoundaryReadAloudPos(pageFactory.prevPage, y.coerceIn(visibleTop, visibleBottom), true)
+        }
+        return null
+    }
+
+    private fun buildBoundaryReadAloudPos(
+        targetPage: TextPage,
+        y: Float,
+        toLastLine: Boolean = false
+    ): Pair<Int, TextLine>? {
+        val targetLine = if (toLastLine) {
+            targetPage.lines.lastOrNull()
+        } else {
+            targetPage.lines.firstOrNull()
+        } ?: return null
+        return targetPage.chapterIndex to targetLine.copy().apply {
+            lineTop = y
+            lineBase = y
+            lineBottom = y
+        }
+    }
+
+    private fun buildReadAloudLine(
+        textLine: TextLine,
+        relativeOffset: Float,
+        columnIndex: Int = 0
+    ): TextLine {
+        val charOffset = getCharOffset(textLine, columnIndex)
+        return textLine.copy().apply {
+            lineTop += relativeOffset
+            lineBase += relativeOffset
+            lineBottom += relativeOffset
+            chapterPosition += charOffset
+            pagePosition += charOffset
+        }
+    }
+
+    private fun getCharOffset(textLine: TextLine, columnIndex: Int): Int {
+        if (columnIndex <= 0) return 0
+        val columns = textLine.columns
+        val validIndex = min(columnIndex, columns.size)
+        var charOffset = 0
+        for (index in 0 until validIndex) {
+            val column = columns[index]
+            if (column is TextColumn) {
+                charOffset += column.charData.length
+            }
+        }
+        return min(charOffset, textLine.charSize)
     }
 
     /**

@@ -838,6 +838,8 @@
     <string name="use_zh_layout">使用自訂中文分行</string>
     <string name="image_style">圖片樣式</string>
     <string name="system_tts">系統TTS</string>
+    <string name="system_default">系統預設</string>
+    <string name="book_built_in_media">書籍內建媒體</string>
     <string name="export_type">導出格式</string>
     <string name="checkAuthor">校驗作者</string>
     <string name="search_src">搜尋源碼</string>

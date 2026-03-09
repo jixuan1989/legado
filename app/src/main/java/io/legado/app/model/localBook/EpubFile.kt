@@ -11,6 +11,7 @@ import io.legado.app.help.book.BookHelp
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.HtmlFormatter
 import io.legado.app.utils.encodeURI
+import io.legado.app.utils.externalFiles
 import io.legado.app.utils.isXml
 import io.legado.app.utils.printOnDebug
 import me.ag2s.epublib.domain.EpubBook
@@ -81,6 +82,13 @@ class EpubFile(var book: Book) {
          */
         fun hasAudio(book: Book): Boolean {
             return getEFile(book).hasAudioInternal()
+        }
+
+        /**
+         * 判断指定章节是否可匹配到内置音频资源。
+         */
+        fun hasAudio(book: Book, chapter: BookChapter): Boolean {
+            return getEFile(book).findAudioResourceInternal(chapter) != null
         }
 
         /**
@@ -180,23 +188,14 @@ class EpubFile(var book: Book) {
         return result
     }
 
-    /**
-     * 为指定章节获取对应的音频文件。
-     * 规则：优先根据章节 url 推导 audio 路径（text/chapter_000.xhtml -> audio/chapter_000.mp3），
-     * 若找不到则按章节索引从音频资源列表中取同序号资源。
-     */
-    private fun getAudioFileInternal(chapter: BookChapter): File? {
+    private fun findAudioResourceInternal(chapter: BookChapter): Resource? {
         val eBook = epubBook ?: return null
         if (!hasAudioInternal()) return null
         return try {
-            // 推导资源 href
             val candidateHref = deriveAudioHrefFromChapterUrl(chapter.url) ?: ""
             val resources = eBook.resources
-            val audioResource = when {
-                candidateHref.isNotBlank() -> {
-                    resources.getByHref(candidateHref)
-                }
-
+            when {
+                candidateHref.isNotBlank() -> resources.getByHref(candidateHref)
                 else -> {
                     val audios = resources.getResourcesByMediaTypes(
                         arrayOf(
@@ -207,8 +206,21 @@ class EpubFile(var book: Book) {
                     )
                     audios.getOrNull(chapter.index)
                 }
-            } ?: return null
+            }
+        } catch (e: Exception) {
+            AppLog.put("匹配 EPUB 音频资源失败\n${e.localizedMessage}", e)
+            null
+        }
+    }
 
+    /**
+     * 为指定章节获取对应的音频文件。
+     * 规则：优先根据章节 url 推导 audio 路径（text/chapter_000.xhtml -> audio/chapter_000.mp3），
+     * 若找不到则按章节索引从音频资源列表中取同序号资源。
+     */
+    private fun getAudioFileInternal(chapter: BookChapter): File? {
+        val audioResource = findAudioResourceInternal(chapter) ?: return null
+        return try {
             // 将资源写入缓存文件
             val cacheDir = FileUtils.createFolderIfNotExist(
                 appCtx.externalFiles,
