@@ -186,6 +186,7 @@ class EpubAudioReadAloudService : BaseReadAloudService(), Player.Listener {
     private fun switchToTtsFallback() {
         progressJob?.cancel()
         exoPlayer?.stop()
+        ReadAloud.switchRunningService(TTSReadAloudService::class.java)
         val pageIndex = ReadBook.durPageIndex
         val pageStart = textChapter?.getReadLength(pageIndex) ?: 0
         val startPos = (ReadBook.durChapterPos - pageStart).coerceAtLeast(0)

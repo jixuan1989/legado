@@ -28,10 +28,16 @@ import splitties.init.appCtx
 object ReadAloud {
     const val BOOK_BUILT_IN_MEDIA = "__book_built_in_media__"
 
-    private var aloudClass: Class<*> = getReadAloudClass()
+    private var aloudClass: Class<*>
+        get() = ReadAloudServiceTarget.get()
+        set(value) = ReadAloudServiceTarget.set(value)
     private var pendingTouchSeekRatio: Float? = null
     val ttsEngine get() = ReadBook.book?.getTtsEngine() ?: AppConfig.ttsEngine
     var httpTTS: HttpTTS? = null
+
+    init {
+        aloudClass = getReadAloudClass()
+    }
 
     private val selectedEngine: SelectItem<String>?
         get() = GSON.fromJsonObject<SelectItem<String>>(ttsEngine).getOrNull()
@@ -100,6 +106,10 @@ object ReadAloud {
     fun upReadAloudClass() {
         stop(appCtx)
         aloudClass = getReadAloudClass()
+    }
+
+    internal fun switchRunningService(serviceClass: Class<*>) {
+        aloudClass = serviceClass
     }
 
     fun play(
