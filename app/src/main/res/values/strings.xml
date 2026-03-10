@@ -305,6 +305,8 @@
     <string name="progress_show">%1$s      Progress %2$d/%3$d</string>
     <string name="tts_fix">Please install and select Chinese TTS!</string>
     <string name="tts_init_failed">TTS initialization failed!</string>
+    <string name="epub_audio_not_found">No built-in audio for this chapter.</string>
+    <string name="epub_audio_play_error">EPUB audio playback error.</string>
     <string name="jf_convert">Simplified conversion</string>
     <string name="jf_convert_o">Off</string>
     <string name="jf_convert_f">Simplified to traditional</string>
@@ -852,6 +854,8 @@
     <string name="use_zh_layout">Custom Chinese line feed</string>
     <string name="image_style">Style of Images</string>
     <string name="system_tts">System tts</string>
+    <string name="system_default">System default</string>
+    <string name="book_built_in_media">Book built-in media</string>
     <string name="export_type">Exported file format</string>
     <string name="checkAuthor">Check by author</string>
     <string name="url_already">This URL has subscribed</string>

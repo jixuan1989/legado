@@ -69,13 +69,17 @@ class ReadAloudConfigDialog : BasePrefDialogFragment() {
         private val speakEngineSummary: String
             get() {
                 val ttsEngine = ReadAloud.ttsEngine
-                    ?: return getString(R.string.system_tts)
+                    ?: return if (ReadAloud.willUseBookBuiltInMedia()) {
+                        getString(R.string.book_built_in_media)
+                    } else {
+                        getString(R.string.system_default)
+                    }
                 if (StringUtils.isNumeric(ttsEngine)) {
                     return appDb.httpTTSDao.getName(ttsEngine.toLong())
-                        ?: getString(R.string.system_tts)
+                        ?: getString(R.string.system_default)
                 }
                 return GSON.fromJsonObject<SelectItem<String>>(ttsEngine).getOrNull()?.title
-                    ?: getString(R.string.system_tts)
+                    ?: getString(R.string.system_default)
             }
 
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {

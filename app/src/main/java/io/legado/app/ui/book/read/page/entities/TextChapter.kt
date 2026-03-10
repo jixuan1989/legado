@@ -11,6 +11,7 @@ import io.legado.app.ui.book.read.page.provider.TextChapterLayout
 import io.legado.app.utils.fastBinarySearchBy
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.min
 
 /**
@@ -50,6 +51,17 @@ data class TextChapter(
     val lastIndex: Int get() = pages.lastIndex
 
     val lastReadLength: Int get() = getReadLength(lastIndex)
+
+    val chapterLength: Int
+        get() {
+            val lastPage = pages.lastOrNull() ?: return 0
+            val lastLine = lastPage.lines.lastOrNull()
+            return if (lastLine != null) {
+                lastLine.chapterPosition + lastLine.charSize
+            } else {
+                lastPage.chapterPosition + lastPage.charSize
+            }
+        }
 
     val pageSize: Int get() = pages.size
 
@@ -145,6 +157,78 @@ data class TextChapter(
             return -1
         }
         return getReadLength(pageIndex - 1)
+    }
+
+    fun getVisualProgressRatio(chapterPosition: Int): Float? {
+        if (!isCompleted) return null
+        val totalLines = pages.sumOf { it.lineSize }
+        if (totalLines <= 0) return null
+        val chapterLength = chapterLength
+        if (chapterLength <= 0) return 0f
+        val clampedPosition = chapterPosition.coerceIn(0, chapterLength)
+        if (clampedPosition >= chapterLength) {
+            return 1f
+        }
+        var passedLines = 0
+        pages.forEach { page ->
+            page.lines.forEachIndexed { lineIndex, line ->
+                val lineStart = line.chapterPosition
+                val lineEndExclusive = lineStart + line.charSize
+                val inCurrentLine = if (line.charSize <= 0) {
+                    clampedPosition <= lineStart
+                } else {
+                    clampedPosition < lineEndExclusive
+                }
+                if (inCurrentLine) {
+                    val lineProgress = if (line.charSize <= 0) {
+                        0f
+                    } else {
+                        ((clampedPosition - lineStart).coerceIn(0, line.charSize)).toFloat() /
+                            line.charSize.toFloat()
+                    }
+                    return ((passedLines + lineIndex + lineProgress) / totalLines.toFloat())
+                        .coerceIn(0f, 1f)
+                }
+            }
+            passedLines += page.lineSize
+        }
+        return 1f
+    }
+
+    fun getChapterPositionByVisualRatio(ratio: Float): Int {
+        val chapterLength = chapterLength
+        if (!isCompleted || chapterLength <= 0) {
+            return 0
+        }
+        val totalLines = pages.sumOf { it.lineSize }
+        if (totalLines <= 0) {
+            return 0
+        }
+        val clampedRatio = ratio.coerceIn(0f, 1f)
+        if (clampedRatio <= 0f) {
+            return 0
+        }
+        if (clampedRatio >= 1f) {
+            return chapterLength
+        }
+        val targetLineOffset = clampedRatio * totalLines.toFloat()
+        val targetLineIndex = floor(targetLineOffset).toInt().coerceIn(0, totalLines - 1)
+        val lineProgress = (targetLineOffset - targetLineIndex.toFloat()).coerceIn(0f, 0.999999f)
+        var passedLines = 0
+        pages.forEach { page ->
+            val pageLineSize = page.lineSize
+            if (targetLineIndex < passedLines + pageLineSize) {
+                val line = page.getLine(targetLineIndex - passedLines)
+                if (line.charSize <= 0) {
+                    return line.chapterPosition
+                }
+                val charOffset = floor(line.charSize * lineProgress).toInt()
+                    .coerceIn(0, line.charSize - 1)
+                return (line.chapterPosition + charOffset).coerceIn(0, chapterLength)
+            }
+            passedLines += pageLineSize
+        }
+        return chapterLength
     }
 
     /**

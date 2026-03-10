@@ -45,6 +45,7 @@ class ReadAloudDialog : BaseDialogFragment(R.layout.dialog_read_aloud) {
 
     override fun onDismiss(dialog: DialogInterface) {
         super.onDismiss(dialog)
+        callBack?.onReadAloudDialogVisibilityChanged(false)
         (activity as ReadBookActivity).bottomDialog--
     }
 
@@ -54,6 +55,7 @@ class ReadAloudDialog : BaseDialogFragment(R.layout.dialog_read_aloud) {
             dismiss()
             return
         }
+        callBack?.onReadAloudDialogVisibilityChanged(true)
         val bg = requireContext().bottomBackground
         val isLight = ColorUtils.isColorLight(bg)
         val textColor = requireContext().getPrimaryTextColor(isLight)
@@ -227,6 +229,7 @@ class ReadAloudDialog : BaseDialogFragment(R.layout.dialog_read_aloud) {
         fun showMenuBar()
         fun openChapterList()
         fun onClickReadAloud()
+        fun onReadAloudDialogVisibilityChanged(showing: Boolean)
         fun finish()
     }
 }
